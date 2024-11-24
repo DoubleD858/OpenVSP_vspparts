@@ -1,18 +1,19 @@
 
 
+
 //==== Init Is Called Once During Each Custom Geom Construction  ============================//
 //==== Avoid Global Variables Unless You Want Shared With All Custom Geoms of This Type =====//
 void Init()
 {
 	//==== Parms  =====//
 	string length = AddParm( PARM_DOUBLE_TYPE, "Length", "Design" );
-	SetParmValLimits( length, 10.0, 0.001, 1.0e12 );
+	SetParmValLimits( length, 4.0, 0.001, 1.0e12 );
 
-    string  max_diam = AddParm( PARM_DOUBLE_TYPE, "Max_Diam.", "Design" );
-	SetParmValLimits( max_diam, 1.0, 0.001, 1.0e12 );
+    string  diam = AddParm( PARM_DOUBLE_TYPE, "Diam.", "Design" );
+	SetParmValLimits( diam, 1.0, 0.001, 1.0e12 );
 
-	//string volume = AddParm( PARM_DOUBLE_TYPE, "Volume", "Design" );
-	//SetParmValLimits( volume, 1.0, 0.001, 1.0e12 );
+	string  n= AddParm( PARM_DOUBLE_TYPE, "N", "Design" );
+	SetParmValLimits( n, 0.75, 0.0, 1.0 );
 
 	string nxsec = AddParm( PARM_INT_TYPE, "N_XSEC", "Design" );
 	SetParmValLimits( nxsec, 11, 3, 1000);
@@ -41,8 +42,8 @@ void InitGui()
 	AddGui( GDEV_TAB, "Design"  );
 	AddGui( GDEV_YGAP );
 	AddGui( GDEV_SLIDER_ADJ_RANGE_INPUT, "length", "Length", "Design"  );
-	//AddGui( GDEV_SLIDER_ADJ_RANGE_INPUT, "Volume", "Volume", "Design"  );
-	AddGui( GDEV_SLIDER_ADJ_RANGE_INPUT, "Max_Diam.", "Max_Diam.", "Design"  );	
+	AddGui( GDEV_SLIDER_ADJ_RANGE_INPUT, "Diam.", "Diam.", "Design"  );	
+	AddGui( GDEV_SLIDER_ADJ_RANGE_INPUT, "N","N", "Design"  );	
 	AddGui( GDEV_SLIDER_ADJ_RANGE_INPUT, "N_XSEC", "N_XSEC", "Design"  );
 
 } 
@@ -60,8 +61,8 @@ void UpdateSurf()
 
 	//==== Get Curr Vals ====//
 	double length   = GetParmVal( GetParm( geom_id, "Length", "Design" ) );
-	//double volume  = GetParmVal( GetParm( geom_id, "Volume",  "Design" ) );
-	double max_diam   = GetParmVal( GetParm( geom_id, "Max_Diam.",  "Design" ) );
+	double diam   = GetParmVal( GetParm( geom_id, "Diam.",  "Design" ) );
+	double n  = GetParmVal( GetParm( geom_id, "N",  "Design" ) );
     int NXSEC  = GetIntParmVal( GetParm( geom_id, "N_XSEC",  "Design" ) );
 
 	//==== Get The XSec Surf ====//
@@ -74,17 +75,16 @@ void UpdateSurf()
     string xsec = AppendCustomXSec( xsec_surf, XS_POINT); // first point
     SetCustomXSecLoc(xsec, vec3d(0.0,0.0,0.0));
 
-    for ( int i = 1 ; i <= NXSEC-2 ; i++ )
+for ( int i = 1 ; i <= NXSEC-2 ; i++ )
     {
 	    xsec = AppendCustomXSec( xsec_surf, XS_CIRCLE);
 
         double i_double = i;
 		double NXSEC_double = NXSEC;
-        double x = length*(i_double/(NXSEC_double-1.0));
-		double xr = x/length;
+        double x = length*(i_double/(NXSEC_double-2.0));
         SetCustomXSecLoc(xsec, vec3d(x,0.0,0.0));
-        double diameter = max_diam*pow((4*xr*(1-xr)),3.0/4.0);
-		double slope = 3.0*(max_diam/2.0)*pow(4*xr*(1-xr),-0.25)*(1-2*xr);
+        double diameter = diam*pow(x/length,n);
+		//double slope = ;
 		//double angle = atan(slope)*180/pi;
         SetParmVal(GetXSecParm(xsec,"Circle_Diameter"),diameter);
 		//SetXSecContinuity( xsec, 2 );
