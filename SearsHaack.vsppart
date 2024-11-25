@@ -30,8 +30,8 @@ void Init()
 
 	//==== Set Some Decent Tess Vals ====//
 	string geom_id = GetCurrCustomGeom(); // last point
-	SetParmVal( GetParm( geom_id, "Tess_U",  "Shape" ), 33 );
-	SetParmVal( GetParm( geom_id, "Tess_W",  "Shape" ), 13 );
+	SetParmVal( GetParm( geom_id, "Tess_U",  "Shape" ), 11 );
+	SetParmVal( GetParm( geom_id, "Tess_W",  "Shape" ), 33);
 
 }
 
@@ -85,11 +85,12 @@ void UpdateSurf()
         SetCustomXSecLoc(xsec, vec3d(x,0.0,0.0));
         double diameter = max_diam*pow((4*xr*(1-xr)),3.0/4.0);
 		double slope = 3.0*(max_diam/2.0)*pow(4*xr*(1-xr),-0.25)*(1-2*xr);
-		//double angle = atan(slope)*180/pi;
+		slope = slope/length; // IMPORTANT: Scale local slope by the length of the whole part
+		double angle = atan(slope)*180/pi;
         SetParmVal(GetXSecParm(xsec,"Circle_Diameter"),diameter);
 		//SetXSecContinuity( xsec, 2 );
-		//SetXSecTanAngles( xsec, XSEC_BOTH_SIDES, angle);
-    	//SetXSecTanStrengths(  xsec, XSEC_BOTH_SIDES,1.0);
+		SetXSecTanAngles( xsec, XSEC_BOTH_SIDES, angle);
+    	SetXSecTanStrengths(  xsec, XSEC_BOTH_SIDES,length/NXSEC); // IMPORTANT: For parts with uniform spacing, the strength is basically the radius of curvature, so use xi+1-xi
     }
 	xsec = AppendCustomXSec( xsec_surf, XS_POINT);
     SetCustomXSecLoc(xsec, vec3d(length,0.0,0.0));
