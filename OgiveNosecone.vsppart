@@ -1,0 +1,116 @@
+// Circular-arc ogive, from conical through secant to tangent.
+
+void Init()
+{
+    string diameter = AddParm(PARM_DOUBLE_TYPE, "Diameter", "Design");
+    SetParmValLimits(diameter, 1, 0.001, 1.0e12);
+    SetParmDescript(diameter, "Base diameter in model units.");
+
+    string fineness = AddParm(PARM_DOUBLE_TYPE, "Fineness", "Design");
+    SetParmValLimits(fineness, 4, 0.5, 1000);
+    SetParmDescript(
+        fineness,
+        "Axial length divided by base diameter. One half allows a hemispherical tangent ogive.");
+
+    string arcFraction = AddParm(PARM_DOUBLE_TYPE, "ArcFraction", "Design");
+    SetParmValLimits(arcFraction, 1, 0, 1);
+    SetParmDescript(
+        arcFraction,
+        "Fraction of the tangent-ogive half angle. Zero gives a cone and one a tangent ogive.");
+
+    string sectionCount = AddParm(PARM_INT_TYPE, "N_XSEC", "Design");
+    SetParmValLimits(sectionCount, 35, 3, 1000);
+    SetParmDescript(sectionCount, "Total sections including the tip and end closure.");
+
+    AddXSecSurf();
+    string geom = GetCurrCustomGeom();
+    SetParmVal(geom, "Tess_U", "Shape", 101);
+    SetParmVal(geom, "Tess_W", "Shape", 49);
+}
+
+void InitGui()
+{
+    AddGui(GDEV_TAB, "Design");
+    AddGui(GDEV_SLIDER_ADJ_RANGE_INPUT, "Base diameter", "Diameter", "Design");
+    AddGui(GDEV_SLIDER_ADJ_RANGE_INPUT, "Length / diameter", "Fineness", "Design");
+    AddGui(GDEV_SLIDER_ADJ_RANGE_INPUT, "Arc fraction", "ArcFraction", "Design");
+    AddGui(GDEV_COUNTER, "Cross sections", "N_XSEC", "Design");
+}
+
+void UpdateGui() {}
+
+void Scale(double factor)
+{
+    string geom = GetCurrCustomGeom();
+    SetParmVal(geom, "Diameter", "Design", factor * GetParmVal(geom, "Diameter", "Design"));
+}
+
+vec3d Profile(double t, double length, double radius, double k)
+{
+    if (t <= 0)
+        return vec3d(0, 0, 0);
+    if (t >= 1)
+        return vec3d(length, radius, 0);
+    double halfAngle = k * atan(radius / length);
+    double chordFraction = halfAngle < 1e-8 ? t : sin(t * halfAngle) / sin(halfAngle);
+    double turn = (1 - t) * halfAngle;
+    return vec3d(chordFraction * (length * cos(turn) - radius * sin(turn)),
+                 chordFraction * (radius * cos(turn) + length * sin(turn)), 0);
+}
+
+vec3d ProfileDerivative(double t, double length, double radius, double k)
+{
+    double chordAngle = atan(radius / length), halfAngle = k * chordAngle;
+    double direction = chordAngle + (1 - 2 * t) * halfAngle;
+    double speed = sqrt(length * length + radius * radius);
+    if (halfAngle >= 1e-8)
+        speed *= halfAngle / sin(halfAngle);
+    return vec3d(speed * cos(direction), speed * sin(direction), 0);
+}
+
+void SetTangent(string section, int side, vec3d derivative)
+{
+    SetXSecTanAngles(section, side, Rad2Deg(atan2(derivative.y(), derivative.x())));
+    SetXSecTanStrengths(section, side, derivative.mag());
+}
+
+void UpdateSurf()
+{
+    string geom = GetCurrCustomGeom();
+    double radius = 0.5 * GetParmVal(geom, "Diameter", "Design");
+    double length = 2 * radius * GetParmVal(geom, "Fineness", "Design");
+    double k = GetParmVal(geom, "ArcFraction", "Design");
+    int count = GetIntParmVal(GetParm(geom, "N_XSEC", "Design"));
+
+    string surf = GetXSecSurf(geom, 0);
+    if (GetNumXSec(surf) != count)
+    {
+        ClearXSecSurfs();
+        surf = AddXSecSurf();
+        for (int i = 0; i < count; ++i)
+        {
+            AppendCustomXSec(surf, (i == 0 || i == count - 1) ? XS_POINT : XS_CIRCLE);
+        }
+    }
+
+    int intervals = count - 2;
+    for (int i = 0; i <= intervals; ++i)
+    {
+        string section = GetXSec(surf, i);
+        double t = double(i) / intervals;
+        vec3d point = Profile(t, length, radius, k);
+        SetCustomXSecLoc(section, vec3d(point.x(), 0, 0));
+        if (i > 0)
+            SetXSecWidthHeight(section, 2 * point.y(), 2 * point.y());
+
+        // One unit of OpenVSP loft parameter spans one pair of adjacent ribs.
+        SetTangent(section, XSEC_BOTH_SIDES, ProfileDerivative(t, length, radius, k) / intervals);
+    }
+
+    // The rear face has a separate radial tangent, keeping its plane and rim sharp.
+    string end = GetXSec(surf, count - 1);
+    SetCustomXSecLoc(end, vec3d(length, 0, 0));
+    SetTangent(GetXSec(surf, count - 2), XSEC_RIGHT_SIDE, vec3d(0, -radius, 0));
+    SetTangent(end, XSEC_BOTH_SIDES, vec3d(0, -radius, 0));
+    SkinXSecSurf();
+}

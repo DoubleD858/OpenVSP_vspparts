@@ -1,0 +1,110 @@
+// Superellipsoid of revolution. Exponent two gives a spheroid.
+
+void Init()
+{
+    string length = AddParm(PARM_DOUBLE_TYPE, "Length", "Design");
+    SetParmValLimits(length, 4, 0.001, 1.0e12);
+    SetParmDescript(length, "Axial length in model units.");
+
+    string diameter = AddParm(PARM_DOUBLE_TYPE, "Diameter", "Design");
+    SetParmValLimits(diameter, 1, 0.001, 1.0e12);
+    SetParmDescript(diameter, "Equatorial diameter in model units.");
+
+    string sectionCount = AddParm(PARM_INT_TYPE, "N_XSEC", "Design");
+    SetParmValLimits(sectionCount, 35, 3, 1000);
+    SetParmDescript(sectionCount, "Total sections including the tip and end closure.");
+
+    string exponent = AddParm(PARM_DOUBLE_TYPE, "Exponent", "Design");
+    SetParmValLimits(exponent, 2, 1.5, 6);
+    SetParmDescript(exponent,
+                    "Meridian exponent. Two is elliptical, larger values give fuller shoulders.");
+    AddXSecSurf();
+    string geom = GetCurrCustomGeom();
+    SetParmVal(geom, "Tess_U", "Shape", 101);
+    SetParmVal(geom, "Tess_W", "Shape", 49);
+}
+
+void InitGui()
+{
+    AddGui(GDEV_TAB, "Design");
+    AddGui(GDEV_SLIDER_ADJ_RANGE_INPUT, "Length", "Length", "Design");
+    AddGui(GDEV_SLIDER_ADJ_RANGE_INPUT, "Equatorial diameter", "Diameter", "Design");
+    AddGui(GDEV_SLIDER_ADJ_RANGE_INPUT, "Meridian exponent", "Exponent", "Design");
+    AddGui(GDEV_COUNTER, "Cross sections", "N_XSEC", "Design");
+}
+
+void UpdateGui() {}
+
+void Scale(double factor)
+{
+    string geom = GetCurrCustomGeom();
+    SetParmVal(geom, "Length", "Design", factor * GetParmVal(geom, "Length", "Design"));
+    SetParmVal(geom, "Diameter", "Design", factor * GetParmVal(geom, "Diameter", "Design"));
+}
+
+const double PI = 3.14159265358979323846;
+
+vec3d Profile(double t, double length, double radius, double exponent)
+{
+    if (t <= 0)
+        return vec3d(0, 0, 0);
+    if (t >= 1)
+        return vec3d(length, 0, 0);
+    // Intersect a ray at a with the normalized Lame curve.
+    double a = PI * t, c = cos(a), s = sin(a);
+    double norm = pow(pow(abs(c), exponent) + pow(s, exponent), 1.0 / exponent);
+    return vec3d(0.5 * length * (1 - c / norm), radius * s / norm, 0);
+}
+
+vec3d ProfileDerivative(double t, double length, double radius, double exponent)
+{
+    double a = PI * t, c = cos(a), s = (t == 0 || t == 1) ? 0 : sin(a);
+    double norm = pow(pow(abs(c), exponent) + pow(s, exponent), 1.0 / exponent);
+    double sign = c >= 0 ? 1 : -1;
+    double factor = PI / pow(norm, exponent + 1);
+    return vec3d(0.5 * length * pow(s, exponent - 1), radius * sign * pow(abs(c), exponent - 1),
+                 0) *
+           factor;
+}
+
+void SetTangent(string section, int side, vec3d derivative)
+{
+    SetXSecTanAngles(section, side, Rad2Deg(atan2(derivative.y(), derivative.x())));
+    SetXSecTanStrengths(section, side, derivative.mag());
+}
+
+void UpdateSurf()
+{
+    string geom = GetCurrCustomGeom();
+    double radius = 0.5 * GetParmVal(geom, "Diameter", "Design");
+    double length = GetParmVal(geom, "Length", "Design");
+    double exponent = GetParmVal(geom, "Exponent", "Design");
+    int count = GetIntParmVal(GetParm(geom, "N_XSEC", "Design"));
+
+    string surf = GetXSecSurf(geom, 0);
+    if (GetNumXSec(surf) != count)
+    {
+        ClearXSecSurfs();
+        surf = AddXSecSurf();
+        for (int i = 0; i < count; ++i)
+        {
+            AppendCustomXSec(surf, (i == 0 || i == count - 1) ? XS_POINT : XS_CIRCLE);
+        }
+    }
+
+    int intervals = count - 1;
+    for (int i = 0; i <= intervals; ++i)
+    {
+        string section = GetXSec(surf, i);
+        double t = double(i) / intervals;
+        vec3d point = Profile(t, length, radius, exponent);
+        SetCustomXSecLoc(section, vec3d(point.x(), 0, 0));
+        if (i > 0 && i < intervals)
+            SetXSecWidthHeight(section, 2 * point.y(), 2 * point.y());
+
+        // One unit of OpenVSP loft parameter spans one pair of adjacent ribs.
+        SetTangent(section, XSEC_BOTH_SIDES,
+                   ProfileDerivative(t, length, radius, exponent) / intervals);
+    }
+    SkinXSecSurf();
+}

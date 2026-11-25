@@ -1,0 +1,61 @@
+// Straight circular transition with planar ends. Equal diameters form a cylinder.
+
+void Init()
+{
+    string length = AddParm(PARM_DOUBLE_TYPE, "Length", "Design");
+    SetParmValLimits(length, 4, 0.001, 1.0e12);
+    SetParmDescript(length, "Axial length in model units.");
+
+    string frontDiameter = AddParm(PARM_DOUBLE_TYPE, "FrontDiameter", "Design");
+    SetParmValLimits(frontDiameter, 1, 0.001, 1.0e12);
+    SetParmDescript(frontDiameter, "Forward diameter in model units.");
+
+    string rearDiameter = AddParm(PARM_DOUBLE_TYPE, "RearDiameter", "Design");
+    SetParmValLimits(rearDiameter, 2, 0.001, 1.0e12);
+    SetParmDescript(rearDiameter, "Aft diameter in model units.");
+
+    AddXSecSurf();
+    string geom = GetCurrCustomGeom();
+    SetParmVal(geom, "Tess_U", "Shape", 101);
+    SetParmVal(geom, "Tess_W", "Shape", 49);
+}
+
+void InitGui()
+{
+    AddGui(GDEV_TAB, "Design");
+    AddGui(GDEV_SLIDER_ADJ_RANGE_INPUT, "Length", "Length", "Design");
+    AddGui(GDEV_SLIDER_ADJ_RANGE_INPUT, "Forward diameter", "FrontDiameter", "Design");
+    AddGui(GDEV_SLIDER_ADJ_RANGE_INPUT, "Aft diameter", "RearDiameter", "Design");
+}
+
+void UpdateGui() {}
+
+void Scale(double factor)
+{
+    string geom = GetCurrCustomGeom();
+    SetParmVal(geom, "Length", "Design", factor * GetParmVal(geom, "Length", "Design"));
+    SetParmVal(geom, "FrontDiameter", "Design",
+               factor * GetParmVal(geom, "FrontDiameter", "Design"));
+    SetParmVal(geom, "RearDiameter", "Design", factor * GetParmVal(geom, "RearDiameter", "Design"));
+}
+
+void UpdateSurf()
+{
+    string geom = GetCurrCustomGeom();
+    string surf = GetXSecSurf(geom, 0);
+    if (GetNumXSec(surf) == 0)
+    {
+        AppendCustomXSec(surf, XS_POINT);
+        AppendCustomXSec(surf, XS_CIRCLE);
+        AppendCustomXSec(surf, XS_CIRCLE);
+        AppendCustomXSec(surf, XS_POINT);
+    }
+    double length = GetParmVal(geom, "Length", "Design");
+    double front = GetParmVal(geom, "FrontDiameter", "Design");
+    double rear = GetParmVal(geom, "RearDiameter", "Design");
+    SetXSecWidthHeight(GetXSec(surf, 1), front, front);
+    SetXSecWidthHeight(GetXSec(surf, 2), rear, rear);
+    SetCustomXSecLoc(GetXSec(surf, 2), vec3d(length, 0, 0));
+    SetCustomXSecLoc(GetXSec(surf, 3), vec3d(length, 0, 0));
+    SkinXSecSurf();
+}

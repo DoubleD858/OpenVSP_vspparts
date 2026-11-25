@@ -1,0 +1,73 @@
+// Cylinder with hemispherical end caps. A zero barrel length gives a sphere.
+
+void Init()
+{
+    string barrelLength = AddParm(PARM_DOUBLE_TYPE, "BarrelLength", "Design");
+    SetParmValLimits(barrelLength, 4, 0, 1.0e12);
+    SetParmDescript(barrelLength, "Straight barrel length in model units.");
+
+    string diameter = AddParm(PARM_DOUBLE_TYPE, "Diameter", "Design");
+    SetParmValLimits(diameter, 1, 0.001, 1.0e12);
+    SetParmDescript(diameter, "Diameter in model units.");
+
+    AddXSecSurf();
+    string geom = GetCurrCustomGeom();
+    SetParmVal(geom, "Tess_U", "Shape", 101);
+    SetParmVal(geom, "Tess_W", "Shape", 49);
+}
+
+void InitGui()
+{
+    AddGui(GDEV_TAB, "Design");
+    AddGui(GDEV_SLIDER_ADJ_RANGE_INPUT, "Barrel length", "BarrelLength", "Design");
+    AddGui(GDEV_SLIDER_ADJ_RANGE_INPUT, "Diameter", "Diameter", "Design");
+}
+
+void UpdateGui() {}
+
+void Scale(double factor)
+{
+    string geom = GetCurrCustomGeom();
+    SetParmVal(geom, "BarrelLength", "Design", factor * GetParmVal(geom, "BarrelLength", "Design"));
+    SetParmVal(geom, "Diameter", "Design", factor * GetParmVal(geom, "Diameter", "Design"));
+}
+
+void UpdateSurf()
+{
+    const int quarters = 12; // Meridional intervals on each hemisphere.
+    const double angleStep = 1.5707963267948966 / quarters;
+    string geom = GetCurrCustomGeom();
+    double radius = GetParmVal(geom, "Diameter", "Design") / 2;
+    double barrel = GetParmVal(geom, "BarrelLength", "Design");
+    int barrelIntervals = barrel > 0 ? 1 : 0;
+    int last = 2 * quarters + barrelIntervals;
+    string surf = GetXSecSurf(geom, 0);
+    if (GetNumXSec(surf) != last + 1)
+    {
+        ClearXSecSurfs();
+        surf = AddXSecSurf();
+        for (int i = 0; i <= last; ++i)
+            AppendCustomXSec(surf, (i == 0 || i == last) ? XS_POINT : XS_CIRCLE);
+    }
+    for (int i = 0; i <= last; ++i)
+    {
+        bool aft = i > quarters;
+        double a = (aft ? i - barrelIntervals : i) * angleStep;
+        string section = GetXSec(surf, i);
+        double x = radius * (1 - cos(a)) + (aft ? barrel : 0);
+        SetCustomXSecLoc(section, vec3d(x, 0, 0));
+        if (i > 0 && i < last)
+        {
+            double d = 2 * radius * sin(a);
+            SetXSecWidthHeight(section, d, d);
+        }
+        SetXSecTanAngles(section, XSEC_BOTH_SIDES, 90 - Rad2Deg(a));
+        SetXSecTanStrengths(section, XSEC_BOTH_SIDES, radius * angleStep);
+    }
+    if (barrelIntervals == 1)
+    {
+        SetXSecTanStrengths(GetXSec(surf, quarters), XSEC_RIGHT_SIDE, barrel);
+        SetXSecTanStrengths(GetXSec(surf, quarters + 1), XSEC_LEFT_SIDE, barrel);
+    }
+    SkinXSecSurf();
+}

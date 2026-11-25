@@ -1,98 +1,105 @@
+// Parabolic-series nose with a flat base.
 
-
-
-//==== Init Is Called Once During Each Custom Geom Construction  ============================//
-//==== Avoid Global Variables Unless You Want Shared With All Custom Geoms of This Type =====//
 void Init()
 {
-	//==== Parms  =====//
-	string length = AddParm( PARM_DOUBLE_TYPE, "Length", "Design" );
-	SetParmValLimits( length, 4.0, 0.001, 1.0e12 );
+    string length = AddParm(PARM_DOUBLE_TYPE, "Length", "Design");
+    SetParmValLimits(length, 4, 0.001, 1.0e12);
+    SetParmDescript(length, "Axial length in model units.");
 
-    string  diam = AddParm( PARM_DOUBLE_TYPE, "Diam.", "Design" );
-	SetParmValLimits( diam, 1.0, 0.001, 1.0e12 );
+    string diameter = AddParm(PARM_DOUBLE_TYPE, "Diam.", "Design");
+    SetParmValLimits(diameter, 1, 0.001, 1.0e12);
+    SetParmDescript(diameter, "Diameter at the base in model units.");
 
-	string  k_prime= AddParm( PARM_DOUBLE_TYPE, "K_prime", "Design" );
-	SetParmValLimits( k_prime, 0.75, 0.0, 1.0 );
+    string parabolicCoefficient = AddParm(PARM_DOUBLE_TYPE, "K_prime", "Design");
+    SetParmValLimits(parabolicCoefficient, 0.75, 0, 1);
+    SetParmDescript(parabolicCoefficient,
+                    "Zero gives a cone. One gives a full parabola tangent at the base.");
 
-	string nxsec = AddParm( PARM_INT_TYPE, "N_XSEC", "Design" );
-	SetParmValLimits( nxsec, 11, 3, 1000);
+    string sectionCount = AddParm(PARM_INT_TYPE, "N_XSEC", "Design");
+    SetParmValLimits(sectionCount, 35, 3, 1000);
+    SetParmDescript(sectionCount, "Total sections including the tip and end closure.");
 
-
-    int NXSEC = 11;
-    //==== Add Cross Sections  =====//
-    string xsec_surf = AddXSecSurf();
-    AppendCustomXSec( xsec_surf, XS_POINT); // first point
-    for ( int i = 1 ; i <= NXSEC-2 ; i++ )
-    {
-	    AppendCustomXSec( xsec_surf, XS_CIRCLE);
-    }
-	AppendCustomXSec( xsec_surf, XS_POINT);
-
-	//==== Set Some Decent Tess Vals ====//
-	string geom_id = GetCurrCustomGeom(); // last point
-	SetParmVal( GetParm( geom_id, "Tess_U",  "Shape" ), 33 );
-	SetParmVal( GetParm( geom_id, "Tess_W",  "Shape" ), 13 );
-
+    AddXSecSurf();
+    string geom = GetCurrCustomGeom();
+    SetParmVal(geom, "Tess_U", "Shape", 101);
+    SetParmVal(geom, "Tess_W", "Shape", 49);
 }
 
-//==== InitGui Is Called Once During Each Custom Geom Construction ====//
 void InitGui()
 {
-	AddGui( GDEV_TAB, "Design"  );
-	AddGui( GDEV_YGAP );
-	AddGui( GDEV_SLIDER_ADJ_RANGE_INPUT, "length", "Length", "Design"  );
-	AddGui( GDEV_SLIDER_ADJ_RANGE_INPUT, "Diam.", "Diam.", "Design"  );	
-	AddGui( GDEV_SLIDER_ADJ_RANGE_INPUT, "K_prime","K_prime", "Design"  );	
-	AddGui( GDEV_SLIDER_ADJ_RANGE_INPUT, "N_XSEC", "N_XSEC", "Design"  );
+    AddGui(GDEV_TAB, "Design");
+    AddGui(GDEV_SLIDER_ADJ_RANGE_INPUT, "Length", "Length", "Design");
+    AddGui(GDEV_SLIDER_ADJ_RANGE_INPUT, "Base diameter", "Diam.", "Design");
+    AddGui(GDEV_SLIDER_ADJ_RANGE_INPUT, "Parabolic coefficient", "K_prime", "Design");
+    AddGui(GDEV_COUNTER, "Cross sections", "N_XSEC", "Design");
+}
 
-} 
+void UpdateGui() {}
 
-//==== UpdateGui Is Called Every Time The Gui is Updated ====//
-void UpdateGui()
+void Scale(double factor)
 {
-} 
+    string geom = GetCurrCustomGeom();
+    SetParmVal(geom, "Length", "Design", factor * GetParmVal(geom, "Length", "Design"));
+    SetParmVal(geom, "Diam.", "Design", factor * GetParmVal(geom, "Diam.", "Design"));
+}
 
-//==== UpdateSurf Is Called Every Time The Geom is Updated ====//
+vec3d Profile(double t, double length, double radius, double k)
+{
+    if (t <= 0)
+        return vec3d(0, 0, 0);
+    if (t >= 1)
+        return vec3d(length, radius, 0);
+    return vec3d(length * t, radius * t * (2 - k * t) / (2 - k), 0);
+}
+
+vec3d ProfileDerivative(double t, double length, double radius, double k)
+{
+    return vec3d(length, radius * 2 * (1 - k * t) / (2 - k), 0);
+}
+
+void SetTangent(string section, int side, vec3d derivative)
+{
+    SetXSecTanAngles(section, side, Rad2Deg(atan2(derivative.y(), derivative.x())));
+    SetXSecTanStrengths(section, side, derivative.mag());
+}
+
 void UpdateSurf()
 {
-    double pi = 3.14159265358979323846264338327;
-	string geom_id = GetCurrCustomGeom();
+    string geom = GetCurrCustomGeom();
+    double radius = 0.5 * GetParmVal(geom, "Diam.", "Design");
+    double length = GetParmVal(geom, "Length", "Design");
+    double k = GetParmVal(geom, "K_prime", "Design");
+    int count = GetIntParmVal(GetParm(geom, "N_XSEC", "Design"));
 
-	//==== Get Curr Vals ====//
-	double length   = GetParmVal( GetParm( geom_id, "Length", "Design" ) );
-	double diam   = GetParmVal( GetParm( geom_id, "Diam.",  "Design" ) );
-	double k_prime  = GetParmVal( GetParm( geom_id, "K_prime",  "Design" ) );
-    int NXSEC  = GetIntParmVal( GetParm( geom_id, "N_XSEC",  "Design" ) );
-
-	//==== Get The XSec Surf ====//
-	string xsec_surf = GetXSecSurf( geom_id, 0 );
-    //==== Remove the old surface so that it can be re-lofted if nxsec changes ====//
-    RemoveXSecSurf(xsec_surf);
-
-    //==== make the new surface x sec s====//
-    xsec_surf = AddXSecSurf();
-    string xsec = AppendCustomXSec( xsec_surf, XS_POINT); // first point
-    SetCustomXSecLoc(xsec, vec3d(0.0,0.0,0.0));
-
-for ( int i = 1 ; i <= NXSEC-2 ; i++ )
+    string surf = GetXSecSurf(geom, 0);
+    if (GetNumXSec(surf) != count)
     {
-	    xsec = AppendCustomXSec( xsec_surf, XS_CIRCLE);
-
-        double i_double = i;
-		double NXSEC_double = NXSEC;
-        double x = length*(i_double/(NXSEC_double-2.0));
-        SetCustomXSecLoc(xsec, vec3d(x,0.0,0.0));
-        double diameter = diam*(2*(x/length)-k_prime*(pow(x/length,2)))/(2-k_prime);
-		//double slope = ;
-		//double angle = atan(slope)*180/pi;
-        SetParmVal(GetXSecParm(xsec,"Circle_Diameter"),diameter);
-		//SetXSecContinuity( xsec, 2 );
-		//SetXSecTanAngles( xsec, XSEC_BOTH_SIDES, angle);
-    	//SetXSecTanStrengths(  xsec, XSEC_BOTH_SIDES,1.0);
+        ClearXSecSurfs();
+        surf = AddXSecSurf();
+        for (int i = 0; i < count; ++i)
+        {
+            AppendCustomXSec(surf, (i == 0 || i == count - 1) ? XS_POINT : XS_CIRCLE);
+        }
     }
-	xsec = AppendCustomXSec( xsec_surf, XS_POINT);
-    SetCustomXSecLoc(xsec, vec3d(length,0.0,0.0));
 
-	SkinXSecSurf();
+    int intervals = count - 2;
+    for (int i = 0; i <= intervals; ++i)
+    {
+        string section = GetXSec(surf, i);
+        double t = double(i) / intervals;
+        vec3d point = Profile(t, length, radius, k);
+        SetCustomXSecLoc(section, vec3d(point.x(), 0, 0));
+        if (i > 0)
+            SetXSecWidthHeight(section, 2 * point.y(), 2 * point.y());
+
+        // One unit of OpenVSP loft parameter spans one pair of adjacent ribs.
+        SetTangent(section, XSEC_BOTH_SIDES, ProfileDerivative(t, length, radius, k) / intervals);
+    }
+
+    // The rear face has a separate radial tangent, keeping its plane and rim sharp.
+    string end = GetXSec(surf, count - 1);
+    SetCustomXSecLoc(end, vec3d(length, 0, 0));
+    SetTangent(GetXSec(surf, count - 2), XSEC_RIGHT_SIDE, vec3d(0, -radius, 0));
+    SetTangent(end, XSEC_BOTH_SIDES, vec3d(0, -radius, 0));
+    SkinXSecSurf();
 }

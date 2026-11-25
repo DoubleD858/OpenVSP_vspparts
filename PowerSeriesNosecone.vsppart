@@ -1,98 +1,198 @@
+// Power-series nose, including the cylinder limit.
 
-
-
-//==== Init Is Called Once During Each Custom Geom Construction  ============================//
-//==== Avoid Global Variables Unless You Want Shared With All Custom Geoms of This Type =====//
 void Init()
 {
-	//==== Parms  =====//
-	string length = AddParm( PARM_DOUBLE_TYPE, "Length", "Design" );
-	SetParmValLimits( length, 4.0, 0.001, 1.0e12 );
+    string length = AddParm(PARM_DOUBLE_TYPE, "Length", "Design");
+    SetParmValLimits(length, 4, 0.001, 1.0e12);
+    SetParmDescript(length, "Axial length in model units.");
 
-    string  diam = AddParm( PARM_DOUBLE_TYPE, "Diam.", "Design" );
-	SetParmValLimits( diam, 1.0, 0.001, 1.0e12 );
+    string diameter = AddParm(PARM_DOUBLE_TYPE, "Diam.", "Design");
+    SetParmValLimits(diameter, 1, 0.001, 1.0e12);
+    SetParmDescript(diameter, "Diameter at the base in model units.");
 
-	string  n= AddParm( PARM_DOUBLE_TYPE, "N", "Design" );
-	SetParmValLimits( n, 0.75, 0.0, 1.0 );
+    string powerExponent = AddParm(PARM_DOUBLE_TYPE, "N", "Design");
+    SetParmValLimits(powerExponent, 0.75, 0, 1);
+    SetParmDescript(powerExponent,
+                    "Zero gives a flat-ended cylinder, one half a paraboloid and one a cone.");
 
-	string nxsec = AddParm( PARM_INT_TYPE, "N_XSEC", "Design" );
-	SetParmValLimits( nxsec, 11, 3, 1000);
+    string sectionCount = AddParm(PARM_INT_TYPE, "N_XSEC", "Design");
+    SetParmValLimits(sectionCount, 35, 3, 1000);
+    SetParmDescript(sectionCount, "Total sections including the tip and end closure.");
 
-
-    int NXSEC = 11;
-    //==== Add Cross Sections  =====//
-    string xsec_surf = AddXSecSurf();
-    AppendCustomXSec( xsec_surf, XS_POINT); // first point
-    for ( int i = 1 ; i <= NXSEC-2 ; i++ )
-    {
-	    AppendCustomXSec( xsec_surf, XS_CIRCLE);
-    }
-	AppendCustomXSec( xsec_surf, XS_POINT);
-
-	//==== Set Some Decent Tess Vals ====//
-	string geom_id = GetCurrCustomGeom(); // last point
-	SetParmVal( GetParm( geom_id, "Tess_U",  "Shape" ), 33 );
-	SetParmVal( GetParm( geom_id, "Tess_W",  "Shape" ), 13 );
-
+    AddXSecSurf();
+    string geom = GetCurrCustomGeom();
+    SetParmVal(geom, "Tess_U", "Shape", 101);
+    SetParmVal(geom, "Tess_W", "Shape", 49);
 }
 
-//==== InitGui Is Called Once During Each Custom Geom Construction ====//
 void InitGui()
 {
-	AddGui( GDEV_TAB, "Design"  );
-	AddGui( GDEV_YGAP );
-	AddGui( GDEV_SLIDER_ADJ_RANGE_INPUT, "length", "Length", "Design"  );
-	AddGui( GDEV_SLIDER_ADJ_RANGE_INPUT, "Diam.", "Diam.", "Design"  );	
-	AddGui( GDEV_SLIDER_ADJ_RANGE_INPUT, "N","N", "Design"  );	
-	AddGui( GDEV_SLIDER_ADJ_RANGE_INPUT, "N_XSEC", "N_XSEC", "Design"  );
+    AddGui(GDEV_TAB, "Design");
+    AddGui(GDEV_SLIDER_ADJ_RANGE_INPUT, "Length", "Length", "Design");
+    AddGui(GDEV_SLIDER_ADJ_RANGE_INPUT, "Base diameter", "Diam.", "Design");
+    AddGui(GDEV_SLIDER_ADJ_RANGE_INPUT, "Power exponent", "N", "Design");
+    AddGui(GDEV_COUNTER, "Cross sections", "N_XSEC", "Design");
+}
 
-} 
+void UpdateGui() {}
 
-//==== UpdateGui Is Called Every Time The Gui is Updated ====//
-void UpdateGui()
+void Scale(double factor)
 {
-} 
+    string geom = GetCurrCustomGeom();
+    SetParmVal(geom, "Length", "Design", factor * GetParmVal(geom, "Length", "Design"));
+    SetParmVal(geom, "Diam.", "Design", factor * GetParmVal(geom, "Diam.", "Design"));
+}
 
-//==== UpdateSurf Is Called Every Time The Geom is Updated ====//
+vec3d Profile(double t, double length, double radius, double k)
+{
+    if (t <= 0)
+        return vec3d(0, 0, 0);
+    if (t >= 1)
+        return vec3d(length, radius, 0);
+    // Solve x/L + r/R = 2t so both the nose and shoulder receive stations
+    // even for small exponents. Inverting r first avoids an infinite tip slope.
+    // The aft half is better conditioned in x when k approaches zero.
+    if (t > 0.5)
+    {
+        double low = 2 * t - 1, high = t;
+        for (int i = 0; i < 48; ++i)
+        {
+            double x = 0.5 * (low + high);
+            if (x + pow(x, k) < 2 * t)
+                low = x;
+            else
+                high = x;
+        }
+        double x = 0.5 * (low + high);
+        return vec3d(length * x, radius * pow(x, k), 0);
+    }
+    double low = t, high = 2 * t;
+    for (int i = 0; i < 48; ++i)
+    {
+        double r = 0.5 * (low + high);
+        if (r + pow(r, 1.0 / k) < 2 * t)
+            low = r;
+        else
+            high = r;
+    }
+    double r = 0.5 * (low + high);
+    return vec3d(length * pow(r, 1.0 / k), radius * r, 0);
+}
+
+vec3d ProfileDerivative(double t, double length, double radius, double k)
+{
+    if (k == 1)
+        return vec3d(length, radius, 0);
+    if (t <= 0)
+        return vec3d(0, 2 * radius, 0);
+    vec3d p = Profile(t, length, radius, k);
+    double x = p.x() / length, r = p.y() / radius;
+    double denom = x + k * r;
+    return vec3d(2 * length * x / denom, 2 * radius * k * r / denom, 0);
+}
+
+void SetTangent(string section, int side, vec3d derivative)
+{
+    SetXSecTanAngles(section, side, Rad2Deg(atan2(derivative.y(), derivative.x())));
+    SetXSecTanStrengths(section, side, derivative.mag());
+}
+
+// Resolve the shoulder at t=1/2 as the power tends to zero, including for odd interval counts.
+double Station(int index, int intervals)
+{
+    if (intervals == 1)
+        return double(index);
+    int front = intervals / 2;
+    if (index <= front)
+        return 0.5 * index / front;
+    return 0.5 + 0.5 * (index - front) / (intervals - front);
+}
+
 void UpdateSurf()
 {
-    double pi = 3.14159265358979323846264338327;
-	string geom_id = GetCurrCustomGeom();
+    string geom = GetCurrCustomGeom();
+    double radius = 0.5 * GetParmVal(geom, "Diam.", "Design");
+    double length = GetParmVal(geom, "Length", "Design");
+    double k = GetParmVal(geom, "N", "Design");
+    int count = GetIntParmVal(GetParm(geom, "N_XSEC", "Design"));
 
-	//==== Get Curr Vals ====//
-	double length   = GetParmVal( GetParm( geom_id, "Length", "Design" ) );
-	double diam   = GetParmVal( GetParm( geom_id, "Diam.",  "Design" ) );
-	double n  = GetParmVal( GetParm( geom_id, "N",  "Design" ) );
-    int NXSEC  = GetIntParmVal( GetParm( geom_id, "N_XSEC",  "Design" ) );
+    // A cylinder needs two end centers and two rims.
+    if (k == 0 && count < 4)
+        count = 4;
 
-	//==== Get The XSec Surf ====//
-	string xsec_surf = GetXSecSurf( geom_id, 0 );
-    //==== Remove the old surface so that it can be re-lofted if nxsec changes ====//
-    RemoveXSecSurf(xsec_surf);
-
-    //==== make the new surface x sec s====//
-    xsec_surf = AddXSecSurf();
-    string xsec = AppendCustomXSec( xsec_surf, XS_POINT); // first point
-    SetCustomXSecLoc(xsec, vec3d(0.0,0.0,0.0));
-
-for ( int i = 1 ; i <= NXSEC-2 ; i++ )
+    string surf = GetXSecSurf(geom, 0);
+    if (GetNumXSec(surf) != count)
     {
-	    xsec = AppendCustomXSec( xsec_surf, XS_CIRCLE);
-
-        double i_double = i;
-		double NXSEC_double = NXSEC;
-        double x = length*(i_double/(NXSEC_double-2.0));
-        SetCustomXSecLoc(xsec, vec3d(x,0.0,0.0));
-        double diameter = diam*pow(x/length,n);
-		//double slope = ;
-		//double angle = atan(slope)*180/pi;
-        SetParmVal(GetXSecParm(xsec,"Circle_Diameter"),diameter);
-		//SetXSecContinuity( xsec, 2 );
-		//SetXSecTanAngles( xsec, XSEC_BOTH_SIDES, angle);
-    	//SetXSecTanStrengths(  xsec, XSEC_BOTH_SIDES,1.0);
+        ClearXSecSurfs();
+        surf = AddXSecSurf();
+        for (int i = 0; i < count; ++i)
+        {
+            AppendCustomXSec(surf, (i == 0 || i == count - 1) ? XS_POINT : XS_CIRCLE);
+        }
     }
-	xsec = AppendCustomXSec( xsec_surf, XS_POINT);
-    SetCustomXSecLoc(xsec, vec3d(length,0.0,0.0));
 
-	SkinXSecSurf();
+    if (k == 0)
+    {
+        for (int i = 0; i < count; ++i)
+        {
+            string section = GetXSec(surf, i);
+            double x = length * (i == 0 ? 0 : (i == count - 1 ? count - 3 : i - 1)) / (count - 3);
+            SetCustomXSecLoc(section, vec3d(x, 0, 0));
+            if (i > 0 && i < count - 1)
+                SetXSecWidthHeight(section, 2 * radius, 2 * radius);
+            vec3d axial(length / (count - 3), 0, 0);
+            SetTangent(section, XSEC_LEFT_SIDE,
+                       i <= 1 ? vec3d(0, radius, 0)
+                              : (i == count - 1 ? vec3d(0, -radius, 0) : axial));
+            SetTangent(section, XSEC_RIGHT_SIDE,
+                       i == 0 ? vec3d(0, radius, 0)
+                              : (i >= count - 2 ? vec3d(0, -radius, 0) : axial));
+        }
+        SkinXSecSurf();
+        return;
+    }
+
+    int intervals = count - 2;
+    for (int i = 0; i <= intervals; ++i)
+    {
+        string section = GetXSec(surf, i);
+        double t = Station(i, intervals);
+        vec3d point = Profile(t, length, radius, k);
+        SetCustomXSecLoc(section, vec3d(point.x(), 0, 0));
+        if (i > 0)
+            SetXSecWidthHeight(section, 2 * point.y(), 2 * point.y());
+
+        vec3d derivative = ProfileDerivative(t, length, radius, k);
+        // Each side spans its own station interval. Limit Hermite slopes to keep
+        // the near-cylinder nose monotone as one coordinate becomes almost constant.
+        double maxDx = length * 4, maxDr = radius * 4;
+        for (int j = i - 1; j <= i + 1; j += 2)
+        {
+            if (j < 0 || j > intervals)
+                continue;
+            double tj = Station(j, intervals);
+            vec3d neighbor = Profile(tj, length, radius, k);
+            double dx = 3 * abs(neighbor.x() - point.x()) / abs(tj - t);
+            double dr = 3 * abs(neighbor.y() - point.y()) / abs(tj - t);
+            if (dx < maxDx)
+                maxDx = dx;
+            if (dr < maxDr)
+                maxDr = dr;
+        }
+        if (derivative.x() > maxDx)
+            derivative.set_x(maxDx);
+        if (derivative.y() > maxDr)
+            derivative.set_y(maxDr);
+        if (i > 0)
+            SetTangent(section, XSEC_LEFT_SIDE, derivative * (t - Station(i - 1, intervals)));
+        if (i < intervals)
+            SetTangent(section, XSEC_RIGHT_SIDE, derivative * (Station(i + 1, intervals) - t));
+    }
+
+    // The rear face has a separate radial tangent, keeping its plane and rim sharp.
+    string end = GetXSec(surf, count - 1);
+    SetCustomXSecLoc(end, vec3d(length, 0, 0));
+    SetTangent(GetXSec(surf, count - 2), XSEC_RIGHT_SIDE, vec3d(0, -radius, 0));
+    SetTangent(end, XSEC_BOTH_SIDES, vec3d(0, -radius, 0));
+    SkinXSecSurf();
 }

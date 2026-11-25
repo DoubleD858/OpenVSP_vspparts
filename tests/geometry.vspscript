@@ -1,0 +1,316 @@
+// Executed by run_checks.py. Surface coordinates are queried from OpenVSP's actual loft.
+const double pi = 3.14159265358979323846;
+int failures = 0;
+
+void Check(bool ok, string label)
+{
+    if (!ok)
+    {
+        ++failures;
+        Print("FAIL " + label);
+    }
+}
+
+double Radius(vec3d p)
+{
+    return sqrt(p.y() * p.y() + p.z() * p.z());
+}
+
+double RefRadius(string name, double x, double length, double radius, double k)
+{
+    double t = x / length;
+    if (name == "SearsHaack")
+        return radius * pow(4 * t * (1 - t), 0.75);
+    if (name == "SuperellipsoidPod")
+        return radius * pow(1 - pow(abs(2 * t - 1), k), 1 / k);
+    if (name == "EllipticalNosecone")
+        return radius * sqrt(t * (2 - t));
+    if (name == "ParabolicNosecone")
+        return radius * (2 * t - k * t * t) / (2 - k);
+    if (name == "PowerSeriesNosecone")
+        return radius * pow(t, k);
+    if (name == "HaackSeriesNosecone")
+    {
+        double a = acos(1 - 2 * t);
+        return radius * sqrt((a - 0.5 * sin(2 * a) + k * pow(sin(a), 3)) / pi);
+    }
+    if (name == "OgiveNosecone")
+    {
+        if (k == 0)
+            return radius * t;
+        // Independent implicit circle through both endpoints; solve for its upper ordinate.
+        double chord = sqrt(length * length + radius * radius);
+        double offset = 0.5 * chord / tan(k * atan(radius / length));
+        double cx = 0.5 * length + offset * radius / chord;
+        double cy = 0.5 * radius - offset * length / chord;
+        return cy + sqrt(cx * cx + cy * cy - (x - cx) * (x - cx));
+    }
+    if (name == "Spherocylinder")
+    {
+        double d = x < radius ? x - radius : (x > length - radius ? x - length + radius : 0);
+        return sqrt(radius * radius - d * d);
+    }
+    return -1;
+}
+
+void ProfileCheck(string name, string key = "", double k = 0, double length = 4,
+                  double radius = 0.5)
+{
+    string g = AddGeom("Verify" + name);
+    Check(g != "", name + " loads");
+    if (g == "")
+        return;
+    if (key != "")
+        SetParmVal(g, key, "Design", k);
+    if (name == "OgiveNosecone")
+        SetParmVal(g, "Fineness", "Design", length / (2 * radius));
+    Update();
+    int count = name == "Spherocylinder" ? 0 : int(GetParmVal(g, "N_XSEC", "Design"));
+    bool full = name == "SearsHaack" || name == "SuperellipsoidPod" || name == "Spherocylinder";
+    double last = full ? 1.0 : double(count - 2) / (count - 1);
+    double first = name == "PowerSeriesNosecone" && k == 0 ? 1.0 / (count - 1) : 0;
+    double worst = 0, volume = 0, oldArea = 0, oldX = 0;
+    for (int i = 0; i <= 600; ++i)
+    {
+        double u = first + (last - first) * i / 600;
+        for (int j = 0; j < 3; ++j)
+        {
+            vec3d p = CompPnt01(g, 0, u, j * 0.123);
+            double x = p.x(), r = Radius(p);
+            Check(x >= -1e-7 * length && x <= length * (1 + 1e-7) && r >= 0,
+                  name + " finite bounds");
+            double clipped = x < 0 ? 0 : (x > length ? length : x);
+            double expected = RefRadius(name, clipped, length, radius, k);
+            double error = abs(r - expected) / radius;
+            // Near vertical tangencies use the implicit curve to avoid a singular radial residual.
+            if (name == "SuperellipsoidPod")
+                error = abs(pow(abs(2 * x / length - 1), k) + pow(r / radius, k) - 1);
+            if (name == "PowerSeriesNosecone" && k > 0 && k < 1)
+            {
+                double axial = abs(x / length - pow(r / radius, 1 / k));
+                if (axial < error)
+                    error = axial;
+            }
+            if (!(error >= 0))
+            {
+                Check(false, name + " non-finite profile");
+                return;
+            }
+            if (error > worst)
+                worst = error;
+            if (j == 0)
+            {
+                Check(x >= oldX - 1e-7 * length, name + " axial order");
+                if (i > 0)
+                    volume += 0.5 * pi * (r * r + oldArea) * (x - oldX);
+                oldArea = r * r;
+                oldX = x;
+            }
+        }
+    }
+    Print(name + " coefficient=" + k +
+          " maximum normalized residual=" + formatFloat(worst, "", 0, 8));
+    Check(worst < 0.003, name + " profile tolerance");
+    Check(abs(CompPnt01(g, 0, 0, 0).x()) < 1e-7 && abs(CompPnt01(g, 0, 1, 0).x() - length) < 1e-7,
+          name + " length");
+    Check(Radius(CompPnt01(g, 0, 0, 0)) < 1e-7 && Radius(CompPnt01(g, 0, 1, 0)) < 1e-7,
+          name + " closes on axis");
+    if (name == "SearsHaack")
+    {
+        for (int j = 0; j <= 40; ++j)
+        {
+            vec3d a = CompPnt01(g, 0, j / 80.0, 0), b = CompPnt01(g, 0, 1 - j / 80.0, 0);
+            Check(abs(a.x() + b.x() - length) < 1e-5 && abs(Radius(a) - Radius(b)) < 1e-6,
+                  "fore-aft symmetry");
+        }
+    }
+    if (!full)
+    {
+        for (int i = 0; i <= 8; ++i)
+        {
+            vec3d p = CompPnt01(g, 0, last + (1 - last) * i / 8, 0.25);
+            Check(abs(p.x() - length) < 1e-6 * length && Radius(p) <= radius * 1.00001,
+                  name + " planar base");
+        }
+    }
+    if (name == "SearsHaack")
+    {
+        double expected = 3 * pi * pi * radius * radius * length / 16;
+        Check(abs(volume / expected - 1) < 0.001, "Sears-Haack integrated volume");
+    }
+    vec3d original = CompPnt01(g, 0, 0.43, 0.21);
+    SetParmValUpdate(g, "Scale", "XForm", 2);
+    Check((CompPnt01(g, 0, 0.43, 0.21) - original * 2).mag() < 2e-5, name + " uniform scaling");
+    DeleteGeom(g);
+}
+
+void LegacyChecks()
+{
+    array<string> names = {"Box",       "BoxGroup",      "Cone",          "Disk",
+                           "Duct",      "OnOffExample",  "PodMan",        "Seat",
+                           "SeatGroup", "TransportFuse", "ConicalFrustum"};
+    array<int> expected = {1, 1, 1, 1, 1, 1, 10, 2, 28, 1, 1};
+    for (uint i = 0; i < names.length(); ++i)
+    {
+        string g = AddGeom("Verify" + names[i]);
+        Update();
+        Check(GetNumMainSurfs(g) == expected[i], names[i] + " surface count");
+        for (int s = 0; s < expected[i]; ++s)
+        {
+            vec3d p = CompPnt01(g, s, 0.37, 0.21);
+            Check(p.mag() >= 0 && p.mag() < 1e4, names[i] + " finite surface");
+        }
+        vec3d original = CompPnt01(g, 0, 0.43, 0.21);
+        SetParmValUpdate(g, "Scale", "XForm", 2);
+        vec3d doubled = CompPnt01(g, 0, 0.43, 0.21);
+        Check((doubled - original * 2).mag() < 2e-5, names[i] + " uniform scaling");
+        SetParmValUpdate(g, "Scale", "XForm", 1);
+        if (names[i] == "ConicalFrustum" || names[i] == "Cone" || names[i] == "Disk")
+        {
+            for (int j = 0; j <= 36; ++j)
+            {
+                double u = double(j) / 36;
+                vec3d p = CompPnt01(g, 0, u, 0.25);
+                double r = Radius(p);
+                if (names[i] == "Cone" && u >= 0.5)
+                    Check(abs(r - (4 - p.x())) < 1e-5, "cone flank");
+                if (names[i] == "Disk")
+                    Check(abs(p.x()) < 1e-6 && abs(r - 5 * u) < 1e-5, "disk radius");
+                if (names[i] == "ConicalFrustum" && u >= 1.0 / 3 && u <= 2.0 / 3)
+                    Check(abs(r - (0.5 + p.x() / 8)) < 1e-5, "frustum straight flank");
+            }
+        }
+        if (names[i] == "Box" || names[i] == "BoxGroup")
+        {
+            SetParmVal(g, "SquareFlag", "Design", 1);
+            SetParmVal(g, "Length", "Design", 2);
+            Update();
+            Check(GetParmVal(g, "Width", "Design") == 2 && GetParmVal(g, "Height", "Design") == 2,
+                  "cube dimensions");
+            if (names[i] == "BoxGroup")
+            {
+                SetParmVal(g, "BoxLayout", "Design", 1);
+                SetParmVal(g, "LayoutTrigger", "Design", 1);
+                Update();
+                Check(GetNumMainSurfs(g) == 8, "box preset 2 by 4");
+            }
+        }
+        if (names[i] == "Duct")
+        {
+            SetParmVal(g, "Camber", "Design", 0.04);
+            SetParmVal(g, "InvertFlag", "Design", 1);
+            Update();
+            Check((CompPnt01(g, 0, 0, 0.37) - CompPnt01(g, 0, 1, 0.37)).mag() < 1e-5,
+                  "closed duct seam");
+        }
+        if (names[i] == "ConicalFrustum")
+        {
+            SetParmVal(g, "RearDiameter", "Design", 1);
+            Update();
+            Check(abs(Radius(CompPnt01(g, 0, 0.5, 0.25)) - 0.5) < 1e-6, "equal-diameter cylinder");
+        }
+        if (names[i] == "OnOffExample")
+        {
+            SetParmVal(g, "OnOffFlag", "Design", 1);
+            Update();
+            Check(GetNumMainSurfs(g) == 2, "switch on");
+            SetParmVal(g, "OnOffFlag", "Design", 0);
+            Update();
+            Check(GetNumMainSurfs(g) == 1, "switch off");
+        }
+        if (names[i] == "PodMan")
+        {
+            SetParmVal(g, "Presets", "Design", 1);
+            SetParmVal(g, "PresetTrigger", "Design", 1);
+            Update();
+            Check(GetParmVal(g, "KneeAngle", "Design") == -90, "seated pose");
+        }
+        if (names[i] == "SeatGroup")
+        {
+            SetParmVal(g, "NumLeft", "Layout", 0);
+            SetParmVal(g, "NumRight", "Layout", 0);
+            SetParmVal(g, "NumMiddle", "Layout", 0);
+            Update();
+            Check(GetNumMainSurfs(g) == 0, "empty cabin");
+            SetParmVal(g, "NumMiddle", "Layout", 1);
+            Update();
+            Check(GetNumMainSurfs(g) == 4, "two single-seat rows");
+        }
+        if (names[i] == "TransportFuse")
+        {
+            SetParmVal(g, "Length", "Design", 0.5);
+            SetParmVal(g, "AftMult", "Design", 10);
+            SetParmVal(g, "NoseMult", "Design", 0.1);
+            Update();
+            double prev = -1;
+            for (int j = 0; j <= 80; ++j)
+            {
+                double x = CompPnt01(g, 0, j / 80.0, 0.25).x();
+                Check(x >= prev - 1e-8 && x <= 0.500001, "short fuselage axial order");
+                prev = x;
+            }
+        }
+        DeleteGeom(g);
+    }
+}
+
+void EditChecks()
+{
+    string a = AddGeom("VerifyPowerSeriesNosecone"), b = AddGeom("VerifyPowerSeriesNosecone");
+    vec3d before = CompPnt01(a, 0, 0.41, 0.25);
+    SetParmVal(a, "Length", "Design", 7);
+    Update();
+    Check(abs(CompPnt01(a, 0, 0.41, 0.25).x() / before.x() - 7.0 / 4) < 0.002,
+          "length edit rescales profile");
+    Check(abs(CompPnt01(b, 0, 1, 0).x() - 4) < 1e-6, "instances are independent");
+    SetParmVal(a, "N", "Design", 0);
+    SetParmVal(a, "N_XSEC", "Design", 3);
+    Update();
+    Check(abs(CompPnt01(a, 0, 0.5, 0.25).x() - 3.5) < 1e-5, "minimum cylinder topology");
+    SetParmVal(a, "N", "Design", 0.5);
+    Update();
+    Check(abs(CompPnt01(a, 0, 0.5, 0.25).x() - 7) < 1e-5, "minimum nose topology");
+    SetParmVal(a, "N_XSEC", "Design", 60);
+    Update();
+    Check(abs(CompPnt01(a, 0, 58.0 / 59, 0.25).x() - 7) < 1e-5, "resolution edit");
+    SetGeomName(a, "roundtrip");
+    WriteVSPFile("roundtrip.vsp3", SET_ALL);
+    VSPRenew();
+    ReadVSPFile("roundtrip.vsp3");
+    string saved = FindGeom("roundtrip", 0);
+    Check(saved != "" && GetParmVal(saved, "Length", "Design") == 7 &&
+              abs(CompPnt01(saved, 0, 58.0 / 59, 0.25).x() - 7) < 1e-5,
+          "model round trip");
+}
+
+void main()
+{
+    LegacyChecks();
+    ProfileCheck("SearsHaack", "", 0, 10);
+    ProfileCheck("EllipticalNosecone");
+    ProfileCheck("HaackSeriesNosecone", "C", 0);
+    ProfileCheck("HaackSeriesNosecone", "C", 1.0 / 3);
+    ProfileCheck("HaackSeriesNosecone", "C", 1);
+    ProfileCheck("ParabolicNosecone", "K_prime", 0);
+    ProfileCheck("ParabolicNosecone", "K_prime", 0.75);
+    ProfileCheck("ParabolicNosecone", "K_prime", 1);
+    ProfileCheck("PowerSeriesNosecone", "N", 0);
+    ProfileCheck("PowerSeriesNosecone", "N", 0.02);
+    ProfileCheck("PowerSeriesNosecone", "N", 0.000001);
+    ProfileCheck("PowerSeriesNosecone", "N", 0.5);
+    ProfileCheck("PowerSeriesNosecone", "N", 1);
+    ProfileCheck("OgiveNosecone", "ArcFraction", 0);
+    ProfileCheck("OgiveNosecone", "ArcFraction", 0.5);
+    ProfileCheck("OgiveNosecone", "ArcFraction", 1);
+    ProfileCheck("OgiveNosecone", "ArcFraction", 1, 0.5);
+    ProfileCheck("SuperellipsoidPod", "Exponent", 1.5);
+    ProfileCheck("SuperellipsoidPod", "Exponent", 2);
+    ProfileCheck("SuperellipsoidPod", "Exponent", 6);
+    ProfileCheck("Spherocylinder", "BarrelLength", 4, 5);
+    ProfileCheck("Spherocylinder", "BarrelLength", 0, 1);
+    EditChecks();
+    while (GetNumTotalErrors() > 0)
+        Check(false, PopLastError().GetErrorString());
+    if (failures == 0)
+        Print("CHECKS PASSED");
+}
